@@ -32,3 +32,11 @@ Confirmed findings sent directly to foundation builder and coordinator:
 Passing probes: ordinary tracking removal, resolved rotating-link identity/material-hash stability, naive Pacific timed normalization, transactional rollback/read-only mutation guard with unchanged database bytes, overlapping lock rejection and release after exceptions.
 
 Foundation integration remains withheld pending corrected regressions and its implementation test suite. Calendar/dismissal/payload recovery and source health integration are not yet reviewed.
+
+### Foundation corrected review — approved for milestone integration
+
+Independently reran the completed implementation with its locked `.venv/bin/python` (Python 3.13.14): `python -m pytest -q tests /private/tmp/techweek-verify/tests/test_review_regressions.py` reported **24 passed** (11 builder tests, 13 independent methods).
+
+All initial findings are corrected. Additional coverage checks unresolved rotating destinations on both www/apex hosts and explicit port 443, including material-hash stability. First-use read-only state creates no durable directory or database. A newly discovered routine-upsert dismissal reset was reproduced, fixed by the builder, and verified: DISMISSED tombstones and previous successful payloads survive mapping refresh.
+
+**Foundation milestone approved.** This approval covers the inspected foundation code and the above deterministic checks. Source extraction, Calendar behavior, integrated dry-run orchestration, live writes, and unattended operations remain separately unverified. Source-specific occurrence conflict handling and health-gated baseline writes belong to later integration checks.
