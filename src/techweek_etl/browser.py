@@ -216,7 +216,7 @@ def resolve_redirects(events: Iterable[RawEvent], *, concurrency: int = 8, timeo
             # Do not bless an HTTP error endpoint or a still-rotating URL.
             if response.is_error or parsed.scheme not in {"http", "https"} or not host:
                 return raw, False
-            if (host == "tech-week.com" or host.endswith(".tech-week.com")) and parsed.path.startswith("/go/event/"):
+            if host == "tech-week.com" or host.endswith(".tech-week.com"):
                 return raw, False
             return RawEvent(raw.city, raw.day, raw.title, raw.time_text, raw.source_url, final, raw.description), False
         except httpx.HTTPError:

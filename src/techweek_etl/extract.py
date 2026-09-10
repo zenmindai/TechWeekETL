@@ -32,12 +32,12 @@ def normalize_city_traversal(traversal: CityTraversal, *, previous_healthy_count
     expected = tuple(CITY_DATES.get(city, traversal.expected_days))
     rejected: list[RejectedRecord] = []
     events: list[Event] = []
-    seen_source: set[tuple[str, str, str]] = set()
+    seen_source: set[tuple[object, str, str, str]] = set()
     for raw in traversal.raw_events:
         if raw.city.lower() != city or raw.day not in expected:
-            rejected.append(RejectedRecord("unexpected_source_day", raw.source_url, raw.day.isoformat()))
+            rejected.append(RejectedRecord("unexpected_source_day", raw.source_url, raw.day.isoformat(), city))
             continue
-        key = (raw.source_url, raw.title.strip().casefold(), raw.time_text.strip().casefold())
+        key = (raw.day, raw.source_url, raw.title.strip().casefold(), raw.time_text.strip().casefold())
         if key in seen_source:
             continue
         seen_source.add(key)
@@ -52,7 +52,7 @@ def normalize_city_traversal(traversal: CityTraversal, *, previous_healthy_count
             identity, confidence = build_identity(event)
             events.append(event.with_identity(identity, confidence))
         except (TypeError, ValueError) as exc:
-            rejected.append(RejectedRecord("normalization_error", raw.source_url, str(exc)))
+            rejected.append(RejectedRecord("normalization_error", raw.source_url, str(exc), city))
     # A destination is one registration event. Multiple distinct occurrences with
     # one canonical destination are ambiguous and therefore withheld for review.
     canonical_occurrences: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
@@ -61,7 +61,8 @@ def normalize_city_traversal(traversal: CityTraversal, *, previous_healthy_count
             canonical_occurrences[event.identity or ""].add((event.title.casefold(), event.start.isoformat(), event.end.isoformat()))
     conflicts = {identity for identity, occurrences in canonical_occurrences.items() if len(occurrences) > 1}
     if conflicts:
-        rejected.extend(RejectedRecord("conflicting_destination_occurrence", "", identity) for identity in sorted(conflicts))
+        rejected.extend(RejectedRecord("conflicting_destination_occurrence", "", identity, city)
+                        for identity in sorted(conflicts))
         events = [event for event in events if event.identity not in conflicts]
     # Multiple rotating source links for precisely the same occurrence become one
     # normalized event, retaining every source link for descriptions/review.

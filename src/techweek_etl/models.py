@@ -85,6 +85,9 @@ class RejectedRecord:
     reason: str
     source_url: str = ""
     detail: str = ""
+    # Empty for legacy/global failures. New extraction records name the city so
+    # replay can fail closed only for the affected source.
+    city: str = ""
 
 
 @dataclass(frozen=True, slots=True)

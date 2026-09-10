@@ -1,6 +1,6 @@
 from datetime import date
 
-from techweek_etl import browser
+from techweek_etl import browser, extract
 
 
 class Locator:
@@ -101,7 +101,7 @@ def test_redirect_resolution_stops_submitting_batches_after_rate_limit(monkeypat
 def test_external_error_and_techweek_final_are_not_canonical(monkeypatch):
     responses = iter([
         type("Response", (), {"status_code": 404, "url": "https://tickets.example/missing", "is_error": True})(),
-        type("Response", (), {"status_code": 200, "url": "https://www.tech-week.com/go/event/new", "is_error": False})(),
+        type("Response", (), {"status_code": 200, "url": "https://www.tech-week.com/calendar/la", "is_error": False})(),
     ])
 
     class Client:
@@ -120,3 +120,29 @@ def test_external_error_and_techweek_final_are_not_canonical(monkeypatch):
         for index in range(2)
     )
     assert all(not item.registration_url for item in browser.resolve_redirects(raw, concurrency=1))
+
+
+def test_same_canonical_occurrence_on_different_days_is_rejected():
+    expected = browser.CITY_DATES["sf"]
+    raw = tuple(
+        browser.RawEvent(
+            "sf",
+            day,
+            "Repeated event",
+            "9:00am",
+            "https://www.tech-week.com/go/event/rotating",
+            "https://tickets.example/events/repeated",
+        )
+        for day in expected[:2]
+    )
+    evidence = tuple(
+        browser.DayEvidence(day, 1 if day in expected[:2] else 0, True)
+        for day in expected
+    )
+    traversal = browser.CityTraversal("sf", raw, expected, evidence, 2, True)
+
+    events, _, rejected = extract.normalize_city_traversal(traversal)
+
+    assert events == ()
+    assert [record.reason for record in rejected] == ["conflicting_destination_occurrence"]
+    assert rejected[0].city == "sf"
