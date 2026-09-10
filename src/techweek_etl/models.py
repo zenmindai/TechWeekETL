@@ -94,6 +94,9 @@ class Snapshot:
     created_at: datetime
     version: int = 1
     rejected: tuple[RejectedRecord, ...] = ()
+    # Raw date/count evidence is retained so a normal extraction can be replayed
+    # without trusting the previous health verdict.
+    day_evidence: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict, compare=False, hash=False, repr=False)
 
     def health_for(self, city: str) -> CityHealth | None:
         return next((health for health in self.city_health if health.city == city.lower()), None)
