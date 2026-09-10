@@ -26,7 +26,7 @@ def _health_json(health: CityHealth) -> dict:
 
 def write_snapshot(path: Path | str, snapshot: Snapshot, *, day_evidence: dict[str, dict[str, int | dict] | tuple[DayEvidence, ...]] | None = None) -> None:
     """Persist event data plus date/count evidence needed to independently replay health."""
-    supplied = day_evidence or snapshot.day_evidence or {}
+    supplied = snapshot.day_evidence if day_evidence is None else day_evidence
     evidence: dict[str, dict[str, dict]] = {}
     for health in snapshot.city_health:
         city = health.city
@@ -74,7 +74,9 @@ def read_snapshot(path: Path | str) -> Snapshot:
         raise ValueError(f"unsupported snapshot version: {payload.get('version')!r}")
     parsed_events = tuple(_parse_event(value) for value in payload.get("events", ()))
     prior = {item["city"].lower(): item for item in payload.get("city_health", ())}
-    evidence_payload = payload.get("day_evidence", {})
+    raw_evidence_payload = payload.get("day_evidence", {})
+    evidence_payload = raw_evidence_payload if isinstance(raw_evidence_payload, dict) else {}
+    evidence_payload_valid = isinstance(raw_evidence_payload, dict)
     health: list[CityHealth] = []; rejected: list[RejectedRecord] = [RejectedRecord(**item) for item in payload.get("rejected", ())]
     serialized_rejections: dict[str, list[RejectedRecord]] = defaultdict(list)
     has_legacy_rejection = False
@@ -93,12 +95,21 @@ def read_snapshot(path: Path | str) -> Snapshot:
             continue
         day_data = evidence_payload.get(city, {})
         evidence: list[DayEvidence] = []
-        malformed = False
-        for raw_day, value in day_data.items():
+        malformed = not evidence_payload_valid or not isinstance(day_data, dict)
+        for raw_day, value in day_data.items() if isinstance(day_data, dict) else ():
             try:
                 if not isinstance(value, dict):
                     raise TypeError("day evidence must be an object")
-                evidence.append(DayEvidence(date.fromisoformat(raw_day), value.get("displayed_count"), bool(value.get("confirmed")), value.get("selected_label", "")))
+                displayed_count = value.get("displayed_count")
+                confirmed = value.get("confirmed")
+                selected_label = value.get("selected_label", "")
+                if displayed_count is not None and (
+                    not isinstance(displayed_count, int) or isinstance(displayed_count, bool) or displayed_count < 0
+                ):
+                    raise TypeError("displayed count must be a nonnegative integer or null")
+                if not isinstance(confirmed, bool) or not isinstance(selected_label, str):
+                    raise TypeError("invalid day evidence fields")
+                evidence.append(DayEvidence(date.fromisoformat(raw_day), displayed_count, confirmed, selected_label))
             except (TypeError, ValueError):
                 malformed = True
         raw_rows = []

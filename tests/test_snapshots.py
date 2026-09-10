@@ -86,3 +86,25 @@ def test_malformed_day_evidence_value_fails_closed_without_crashing(tmp_path):
 
     assert not replayed.health_for("sf").healthy
     assert replayed.health_for("la").healthy
+
+
+def test_malformed_displayed_count_fails_only_affected_city_closed(tmp_path):
+    path = tmp_path / "snapshot.json"
+    write_snapshot(path, _snapshot())
+    payload = json.loads(path.read_text())
+    payload["day_evidence"]["sf"]["2026-10-05"]["displayed_count"] = {"nested": 1}
+    path.write_text(json.dumps(payload))
+
+    replayed = read_snapshot(path)
+
+    assert not replayed.health_for("sf").healthy
+    assert replayed.health_for("la").healthy
+
+
+def test_explicit_empty_evidence_override_is_not_replaced_by_snapshot_data(tmp_path):
+    path = tmp_path / "snapshot.json"
+
+    write_snapshot(path, _snapshot(), day_evidence={})
+
+    payload = json.loads(path.read_text())
+    assert payload["day_evidence"] == {"la": {}, "sf": {}}
