@@ -2,9 +2,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any, Mapping
 
-from .calendar import exact_event_urls, identity_tag, is_protected, managed_metadata
+from .calendar import (
+    event_with_preserved_enrichment,
+    exact_event_urls,
+    identity_tag,
+    is_protected,
+    managed_metadata,
+)
 from .identity import canonical_registration_url, event_material_hash
 from .models import Event, IdentityConfidence, Snapshot, TimingQuality
 
@@ -61,7 +68,9 @@ def plan_sync(snapshot: Snapshot, inventory: list[dict[str, Any]], state: Any, r
                 items.append(PlanItem("REVIEW", event, existing, "protected calendar event")); continue
             if existing.get("status") == "cancelled":
                 items.append(PlanItem("MISSING", event, existing, "managed calendar record is cancelled")); continue
-            if row and row["material_hash"] == event_material_hash(event):
+            effective_hash = event_material_hash(event_with_preserved_enrichment(event, existing))
+            source_hash = (managed_metadata(existing) or {}).get("material_hash")
+            if (row and row["material_hash"] == effective_hash) or source_hash == effective_hash:
                 items.append(PlanItem("REPORT", event, existing, "unchanged"))
             else:
                 items.append(PlanItem("UPDATE", event, existing, "managed record changed"))
@@ -127,7 +136,21 @@ def _title_time_candidate(event: Event, inventory: list[dict[str, Any]]) -> bool
         if str(item.get("summary", "")).strip().casefold() != event.title.strip().casefold():
             continue
         start = item.get("start", {})
-        target = event.start.isoformat()
-        if start.get("dateTime") == target or start.get("date") == target:
+        if _same_start(event.start, start):
             return True
     return False
+
+
+def _same_start(target: date | datetime, value: dict[str, Any]) -> bool:
+    if isinstance(target, datetime):
+        raw = value.get("dateTime")
+        if not raw:
+            return False
+        try:
+            candidate = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if candidate.tzinfo is None or target.tzinfo is None:
+            return candidate == target
+        return candidate.timestamp() == target.timestamp()
+    return value.get("date") == target.isoformat()

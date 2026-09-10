@@ -6,7 +6,7 @@ import base64
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any, Iterable
 from urllib.parse import urlsplit
@@ -44,12 +44,14 @@ def verify_calendar_access(service: Any, calendar_id: str = CANDIDATE_CALENDAR_I
             break
     if primary is None or primary.get("id", "").casefold() != expected_account.casefold():
         raise RuntimeError(f"Google OAuth account is not {expected_account}")
-    calendar = service.calendars().get(calendarId=calendar_id).execute()
+    calendar = next((item for item in _calendar_list(service) if item.get("id") == calendar_id), None)
+    if calendar is None:
+        raise RuntimeError("configured Candidate Events calendar is not in the authenticated account's calendar list")
+    if calendar.get("summary") != "Candidate Events":
+        raise RuntimeError("configured calendar is not named Candidate Events")
     if calendar.get("timeZone") != "America/Los_Angeles":
         raise RuntimeError("Candidate Events calendar must use America/Los_Angeles")
-    # calendarList accessRole is the reliable writable-access indication for shared calendars.
-    access = next((x.get("accessRole") for x in _calendar_list(service) if x.get("id") == calendar_id), None)
-    if access not in {"owner", "writer"}:
+    if calendar.get("accessRole") not in {"owner", "writer"}:
         raise RuntimeError("Candidate Events calendar is not writable by zenmindai@gmail.com")
     return CalendarTarget(expected_account, calendar_id, calendar["timeZone"])
 
@@ -128,12 +130,34 @@ def exact_event_urls(event: dict[str, Any]) -> set[str]:
     return urls
 
 
+def event_with_preserved_enrichment(event: Event, existing: dict[str, Any] | None) -> Event:
+    """Carry forward useful managed enrichment when a later scrape has none."""
+    if event.description.strip() or not existing:
+        return event
+    previous = str(existing.get("description", ""))
+    match = re.search(re.escape(MANAGED_START) + r"(.*?)" + re.escape(MANAGED_END), previous, re.DOTALL)
+    if not match:
+        return event
+    lines = [line.strip() for line in match.group(1).splitlines()]
+    content = [line for line in lines if line and not line.startswith(("Tech Week ", "Registration: ", "Source: ", "Timing: "))]
+    return replace(event, description="\n".join(content).strip()) if content else event
+
+
 def event_payload(event: Event, *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return only source-owned fields for PATCH, retaining useful old enrichment."""
     previous_description = "" if existing is None else str(existing.get("description", ""))
-    description = merge_description(previous_description, managed_description(event))
+    effective = event_with_preserved_enrichment(event, existing)
+    if not event.description.strip() and MANAGED_START in previous_description and MANAGED_END in previous_description:
+        managed = re.search(re.escape(MANAGED_START) + r".*?" + re.escape(MANAGED_END), previous_description, re.DOTALL).group(0)
+    else:
+        managed = managed_description(effective)
+    description = merge_description(previous_description, managed)
     private = dict((existing or {}).get("extendedProperties", {}).get("private", {}))
-    private[MANAGED_KEY] = json.dumps({"identity_tag": identity_tag(event.identity or ""), "city": event.city, "version": 1}, sort_keys=True)
+    from .identity import event_material_hash
+    private[MANAGED_KEY] = json.dumps({
+        "identity_tag": identity_tag(event.identity or ""), "city": event.city,
+        "material_hash": event_material_hash(effective), "version": 1,
+    }, sort_keys=True)
     body: dict[str, Any] = {
         "summary": event.title.strip(), "description": description,
         "extendedProperties": {"private": private},
@@ -161,6 +185,10 @@ def managed_description(event: Event) -> str:
         lines.append(f"Registration: {event.registration_url}")
     if event.source_url:
         lines.append(f"Source: {event.source_url}")
+    if event.timing_quality.value == "default_duration":
+        lines.append("Timing: 60-minute approximate duration; check the source for updates")
+    elif event.all_day:
+        lines.append("Timing: all-day fallback because the source did not provide a start time")
     if event.description.strip():
         lines.extend(("", event.description.strip()))
     lines.append(MANAGED_END)

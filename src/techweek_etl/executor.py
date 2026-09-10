@@ -6,7 +6,16 @@ import socket
 import time
 from typing import Any
 
-from .calendar import CalendarTarget, deterministic_event_id, event_payload, exact_event_urls, identity_tag, insert_payload, is_protected, managed_metadata
+from .calendar import (
+    CalendarTarget,
+    event_payload,
+    event_with_preserved_enrichment,
+    exact_event_urls,
+    identity_tag,
+    insert_payload,
+    is_protected,
+    managed_metadata,
+)
 from .identity import canonical_registration_url
 from .diff import PlanItem, SyncPlan
 from .identity import event_material_hash
@@ -15,28 +24,46 @@ from .identity import event_material_hash
 def execute_plan(service: Any, target: CalendarTarget, plan: SyncPlan, state: Any, *, apply: bool = False, limit: int | None = None) -> list[PlanItem]:
     """Apply at most ``limit`` mutations. Dry-runs make neither Calendar nor state writes."""
     completed: list[PlanItem] = []
-    # Diffing may have used an unbound read-only store; writes are always scoped here.
-    if getattr(state, "account_email", None) is None:
+    if limit is not None and limit < 0:
+        raise ValueError("mutation limit cannot be negative")
+    if not apply:
+        return list(plan.items)
+    bound_account = getattr(state, "account_email", None)
+    bound_calendar = getattr(state, "calendar_id", None)
+    if (bound_account and bound_account != target.account_email) or (
+        bound_calendar and bound_calendar != target.calendar_id
+    ):
+        raise RuntimeError("state store is bound to a different Calendar target")
+    # Diffing may have used an unbound store; writes are always scoped here.
+    if bound_account is None:
         state.account_email, state.calendar_id = target.account_email, target.calendar_id
     remaining = limit
     for item in plan.items:
-        if item.action == "MISSING" and apply and item.event and item.calendar_event and item.calendar_event.get("status") == "cancelled":
+        if item.action == "MISSING" and item.event and item.calendar_event and item.calendar_event.get("status") == "cancelled":
+            if remaining is not None and remaining <= 0:
+                completed.append(PlanItem("REPORT", item.event, item.calendar_event, "mutation limit reached"))
+                continue
             _persist(state, item.event, item.calendar_event.get("id"), action="DISMISSED", dismissal="DISMISSED")
+            if remaining is not None:
+                remaining -= 1
             completed.append(item)
             continue
         if item.action not in {"INSERT", "UPDATE", "ADOPT"}:
             completed.append(item); continue
         if remaining is not None and remaining <= 0:
             completed.append(PlanItem("REPORT", item.event, item.calendar_event, "mutation limit reached")); continue
-        if not apply:
-            completed.append(item); continue
         if remaining is not None:
             remaining -= 1
         try:
             result = _execute_item(service, target, item)
         except Exception as exc:
+            with state.transaction():
+                state.record_outcome(item.event.identity if item.event else None, "FAILED", str(exc))
             completed.append(PlanItem("REVIEW", item.event, item.calendar_event, f"write failed: {exc}")); continue
-        _persist(state, item.event, result.get("id"), action=item.action, payload=result)
+        effective = event_with_preserved_enrichment(
+            item.event, item.calendar_event if item.action in {"UPDATE", "ADOPT"} else None
+        )
+        _persist(state, effective, result.get("id"), action=item.action, payload=result)
         completed.append(item)
     return completed
 

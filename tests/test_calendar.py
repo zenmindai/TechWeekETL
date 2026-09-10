@@ -1,8 +1,16 @@
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+import stat
 
-from techweek_etl.calendar import CalendarTarget, deterministic_event_id, event_payload, insert_payload
+from techweek_etl.auth import _write_token
+from techweek_etl.calendar import (
+    CalendarTarget,
+    deterministic_event_id,
+    event_payload,
+    insert_payload,
+    verify_calendar_access,
+)
 from techweek_etl.diff import PlanItem, SyncPlan, plan_sync
 from techweek_etl.executor import execute_plan
 from techweek_etl.identity import build_identity
@@ -71,3 +79,28 @@ def test_apply_uses_body_id_and_if_match_header_and_dry_run_writes_nothing(tmp_p
         assert [call[0] for call in service.api.calls] == ["patch"]
         # the actual request object records its conditional header before execute
         assert state.get_calendar_identity(target.account_email, target.calendar_id, event.identity) is not None
+
+
+def test_oauth_token_replacement_is_owner_only(tmp_path: Path) -> None:
+    path = tmp_path / "token.json"
+    _write_token(path, '{"refresh_token":"secret"}')
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert path.read_text(encoding="utf-8") == '{"refresh_token":"secret"}'
+
+
+def test_target_verification_uses_calendar_list_scope_and_checks_identity() -> None:
+    target_id = "candidate@example.test"
+
+    class CalendarList:
+        def list(self, **kwargs):
+            return Request({"items": [
+                {"id": "zenmindai@gmail.com", "primary": True},
+                {"id": target_id, "summary": "Candidate Events", "timeZone": "America/Los_Angeles", "accessRole": "owner"},
+            ]})
+
+    class ReadOnlyService:
+        def calendarList(self):
+            return CalendarList()
+
+    verified = verify_calendar_access(ReadOnlyService(), target_id)
+    assert verified == CalendarTarget("zenmindai@gmail.com", target_id, "America/Los_Angeles")
