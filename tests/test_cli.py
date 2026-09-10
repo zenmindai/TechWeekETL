@@ -5,6 +5,7 @@ import pytest
 
 from techweek_etl import cli
 from techweek_etl.calendar import CalendarTarget
+from techweek_etl.diff import PlanItem
 from techweek_etl.identity import build_identity
 from techweek_etl.models import CityHealth, Event, Snapshot
 from techweek_etl.normalize import normalize_event_timing
@@ -99,3 +100,31 @@ def test_snapshot_rejects_city_filter_that_would_hide_source_evidence(tmp_path: 
     service = _Service(); _patch_calendar(monkeypatch, service)
     with pytest.raises(SystemExit, match="cannot be combined"):
         cli.main(_arguments(tmp_path, "sync", "--snapshot", str(snapshot_path), "--city", "sf"))
+
+
+def test_apply_cannot_lower_durable_baseline_when_plan_health_gate_rejects_city(tmp_path: Path, monkeypatch) -> None:
+    snapshot_path = tmp_path / "source.json"; write_snapshot(snapshot_path, _snapshot())
+    database = tmp_path / "app" / "state.sqlite"; database.parent.mkdir()
+    with StateStore(database) as state:
+        with state.transaction():
+            state.set_baseline("sf", 100)
+    service = _Service(); _patch_calendar(monkeypatch, service)
+
+    assert cli.main(_arguments(tmp_path, "sync", "--snapshot", str(snapshot_path), "--apply")) == 0
+    with StateStore(database, read_only=True) as state:
+        assert state.get_baseline("sf") == 100
+
+
+@pytest.mark.parametrize("reason", ["write failed: service unavailable", "mutation limit reached"])
+def test_incomplete_apply_does_not_advance_baseline(tmp_path: Path, monkeypatch, reason: str) -> None:
+    snapshot_path = tmp_path / "source.json"; write_snapshot(snapshot_path, _snapshot())
+    service = _Service(); _patch_calendar(monkeypatch, service)
+
+    def incomplete(_service, _target, plan, _state, *, apply, limit):
+        assert apply is True
+        return [PlanItem("REVIEW", plan.items[0].event, reason=reason)]
+
+    monkeypatch.setattr(cli, "execute_plan", incomplete)
+    assert cli.main(_arguments(tmp_path, "sync", "--snapshot", str(snapshot_path), "--apply")) == 0
+    with StateStore(tmp_path / "app" / "state.sqlite", read_only=True) as state:
+        assert state.get_baseline("sf") is None

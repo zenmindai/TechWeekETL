@@ -153,10 +153,16 @@ def main(argv: Sequence[str] | None = None, *, collector: Callable[[str], Any] =
                 snapshot = extract_snapshot(_cities(args), previous, collector=collector)
             plan = plan_sync(snapshot, inventory, state)
             completed = execute_plan(service, target, plan, state, apply=args.apply, limit=args.limit)
-            if args.apply:
+            incomplete_execution = any(
+                "write failed" in item.reason or "mutation limit reached" in item.reason
+                for item in completed
+            )
+            if args.apply and not incomplete_execution:
                 with state.transaction():
                     for health in snapshot.city_health:
-                        if health.healthy:
+                        # plan_sync incorporates the durable baseline gate. Do
+                        # not let a source-supplied health verdict lower it.
+                        if health.city in plan.healthy_cities:
                             state.set_baseline(health.city, health.collected_count)
         report = _plan_report(completed)
         report.update({"dry_run": not args.apply, "snapshot": str(args.snapshot) if args.snapshot else None,
