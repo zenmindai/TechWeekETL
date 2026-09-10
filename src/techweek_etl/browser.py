@@ -65,7 +65,8 @@ def _scan_schedule(page: Page, city: str) -> tuple[list[RawEvent], set[date], in
             const link = row.querySelector('a[href^="/go/event/"][aria-label], a[href*="tech-week.com/go/event/"][aria-label]');
             const title = row.querySelector('.event-title')?.textContent?.trim() || '';
             const time = row.querySelector('td')?.innerText?.trim() || '';
-            return {first, href: link?.getAttribute('href') || '', title, time};
+            const isHeader = Boolean(row.querySelector(':scope > td[colspan="4"]'));
+            return {first, href: link?.getAttribute('href') || '', title, time, isHeader};
         })"""
     )
     current_day: date | None = None
@@ -74,11 +75,13 @@ def _scan_schedule(page: Page, city: str) -> tuple[list[RawEvent], set[date], in
     rendered_event_rows = 0
     for row in rows:
         header = _clean_text(row.get("first"))
-        if re.match(r"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), Oct \d{1,2}$", header):
+        href = str(row.get("href") or "")
+        # Event content can itself look like a date. A real schedule header is
+        # the dedicated cell spanning all four table columns.
+        if row.get("isHeader") and re.match(r"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), Oct \d{1,2}$", header):
             current_day = date(2026, 10, int(header.rsplit(" ", 1)[1]))
             headers.add(current_day)
             continue
-        href = str(row.get("href") or "")
         if not href:
             continue
         rendered_event_rows += 1
@@ -126,7 +129,14 @@ def collect_city(city: str, *, headless: bool = True, timeout_ms: int = 240_000)
         browser: Browser = playwright.chromium.launch(headless=headless)
         try:
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
-            page.goto(CITY_URLS[city], wait_until="networkidle", timeout=timeout_ms)
+            for attempt in range(3):
+                if attempt == 0:
+                    page.goto(CITY_URLS[city], wait_until="networkidle", timeout=timeout_ms)
+                else:
+                    page.reload(wait_until="networkidle", timeout=timeout_ms)
+                page.wait_for_timeout(1_000)
+                if _displayed_count(page) is not None and page.locator('a[href^="/go/event/"]').count():
+                    break
             _clear_filters(page)
             # The live control is a switch. aria-checked=false means closed
             # events are included; turn filtering off if it was left on.
@@ -147,15 +157,19 @@ def collect_city(city: str, *, headless: bool = True, timeout_ms: int = 240_000)
                 current_displayed = _displayed_count(page)
                 if current_displayed is not None:
                     aggregate = current_displayed
-                if aggregate is not None and rendered_count == aggregate and headers == set(expected):
+                if aggregate is not None and rendered_count == aggregate and set(expected).issubset(headers):
                     break
                 stable_rounds = stable_rounds + 1 if rendered_count == previous_count else 0
                 previous_count = rendered_count
-                if stable_rounds >= 30:
+                if stable_rounds >= 60:
                     issues.append("incremental schedule rendering stopped before count reconciliation")
                     break
+                # The production page normally listens for viewport scrolling,
+                # and some loads do not react to a bare scrollTo call. Drive a
+                # wheel event as well, then pin to the new document bottom.
+                page.mouse.wheel(0, 100_000)
                 page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(750)
             else:
                 issues.append("schedule traversal timed out")
             counts: dict[date, int] = {day: 0 for day in expected}

@@ -26,10 +26,10 @@ class Page:
 
 def test_schedule_scan_assigns_rows_to_day_headers_and_counts_malformed_rows():
     rows = [
-        {"first": "Monday, Oct 5", "href": "", "title": "", "time": ""},
+        {"first": "Monday, Oct 5", "href": "", "title": "", "time": "", "isHeader": True},
         {"first": "12:00am", "href": "/go/event/a", "title": "One", "time": "12:00am"},
         {"first": "1:00am", "href": "/go/event/b", "title": "", "time": "1:00am"},
-        {"first": "Tuesday, Oct 6", "href": "", "title": "", "time": ""},
+        {"first": "Tuesday, Oct 6", "href": "", "title": "", "time": "", "isHeader": True},
         {"first": "6:15am", "href": "/go/event/c", "title": "Two", "time": "6:15am"},
     ]
     events, headers, rendered = browser._scan_schedule(Page(rows), "sf")
@@ -39,6 +39,26 @@ def test_schedule_scan_assigns_rows_to_day_headers_and_counts_malformed_rows():
         (date(2026, 10, 5), "One"),
         (date(2026, 10, 6), "Two"),
     ]
+
+
+def test_schedule_scan_does_not_treat_date_shaped_event_title_as_header():
+    rows = [
+        {"first": "Monday, Oct 5", "href": "", "title": "", "time": "", "isHeader": True},
+        {
+            "first": "Friday, Oct 16",
+            "href": "/go/event/date-title",
+            "title": "Friday, Oct 16",
+            "time": "9:00am",
+            "isHeader": False,
+        },
+        {"first": "Tuesday, Oct 6", "href": "", "title": "", "time": "", "isHeader": True},
+    ]
+
+    events, headers, rendered = browser._scan_schedule(Page(rows), "sf")
+
+    assert rendered == 1
+    assert headers == {date(2026, 10, 5), date(2026, 10, 6)}
+    assert events[0].day == date(2026, 10, 5)
 
 
 def test_matching_event_count_is_parsed():
