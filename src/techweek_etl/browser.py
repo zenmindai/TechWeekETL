@@ -61,7 +61,7 @@ def _scan_schedule(page: Page, city: str) -> tuple[list[RawEvent], set[date], in
     """Parse every currently appended row and associate it with its day header."""
     rows = page.locator("tr").evaluate_all(
         """rows => rows.map(row => {
-            const first = (row.innerText || '').split('\n')[0].trim();
+            const first = (row.innerText || '').split('\\n')[0].trim();
             const link = row.querySelector('a[href^="/go/event/"][aria-label], a[href*="tech-week.com/go/event/"][aria-label]');
             const title = row.querySelector('.event-title')?.textContent?.trim() || '';
             const time = row.querySelector('td')?.innerText?.trim() || '';
@@ -104,9 +104,13 @@ def _displayed_count(page: Page) -> int | None:
 
 def _clear_filters(page: Page) -> None:
     controls = page.get_by_text(re.compile(r"clear all filters", re.I))
-    if controls.count():
+    if controls.count() and controls.first.is_enabled():
         controls.first.click()
-        page.wait_for_timeout(500)
+        deadline = time.monotonic() + 10
+        while controls.first.is_enabled() and time.monotonic() < deadline:
+            page.wait_for_timeout(200)
+        if controls.first.is_enabled():
+            raise RuntimeError("filters did not clear")
 
 
 def collect_city(city: str, *, headless: bool = True, timeout_ms: int = 240_000) -> CityTraversal:
