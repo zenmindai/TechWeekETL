@@ -57,54 +57,46 @@ def _clean_text(value: str | None) -> str:
     return " ".join((value or "").split())
 
 
-def _row_events(page: Page, city: str, day: date) -> list[RawEvent]:
-    """Read table rows, retaining one link per event row (desktop/mobile duplicate)."""
-    rows = page.locator("tr").all()
-    found: list[RawEvent] = []
-    seen: set[tuple[str, str, str]] = set()
+def _scan_schedule(page: Page, city: str) -> tuple[list[RawEvent], set[date], int]:
+    """Parse every currently appended row and associate it with its day header."""
+    rows = page.locator("tr").evaluate_all(
+        """rows => rows.map(row => {
+            const first = (row.innerText || '').split('\n')[0].trim();
+            const link = row.querySelector('a[href^="/go/event/"][aria-label], a[href*="tech-week.com/go/event/"][aria-label]');
+            const title = row.querySelector('.event-title')?.textContent?.trim() || '';
+            const time = row.querySelector('td')?.innerText?.trim() || '';
+            return {first, href: link?.getAttribute('href') || '', title, time};
+        })"""
+    )
+    current_day: date | None = None
+    headers: set[date] = set()
+    events: dict[tuple[date, str, str, str], RawEvent] = {}
+    rendered_event_rows = 0
     for row in rows:
-        anchors = row.locator("a[href^='/go/event/'], a[href*='tech-week.com/go/event/']").all()
-        if not anchors:
+        header = _clean_text(row.get("first"))
+        if re.match(r"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), Oct \d{1,2}$", header):
+            current_day = date(2026, 10, int(header.rsplit(" ", 1)[1]))
+            headers.add(current_day)
             continue
-        anchor = anchors[0]
-        href = anchor.get_attribute("href") or ""
+        href = str(row.get("href") or "")
+        if not href:
+            continue
+        rendered_event_rows += 1
+        if current_day is None:
+            continue
         source_url = urljoin(CITY_URLS[city], href)
-        title_node = row.locator(".event-title").first
-        title = _clean_text(title_node.get_attribute("title") if title_node.count() else "")
-        if not title:
-            title = _clean_text(anchor.get_attribute("aria-label") or anchor.inner_text())
-        cells = row.locator("td").all()
-        time_text = _clean_text(cells[0].inner_text() if cells else "")
-        key = (source_url, title, time_text)
-        if not title or key in seen:
-            continue
-        seen.add(key)
-        found.append(RawEvent(city, day, title, time_text, source_url))
-    return found
-
-
-def _settled_row_events(page: Page, city: str, day: date) -> list[RawEvent]:
-    """Scroll the table to trigger incremental rendering, until the row set settles."""
-    previous: set[tuple[str, str, str]] | None = None
-    stable = 0
-    result: list[RawEvent] = []
-    for _ in range(18):
-        result = _row_events(page, city, day)
-        current = {(item.source_url, item.title, item.time_text) for item in result}
-        stable = stable + 1 if current == previous else 0
-        if stable >= 2:
-            break
-        previous = current
-        page.mouse.wheel(0, 1100)
-        page.wait_for_timeout(300)
-    page.evaluate("window.scrollTo(0, 0)")
-    return result
+        title = _clean_text(row.get("title"))
+        time_text = _clean_text(row.get("time"))
+        if title:
+            key = (current_day, source_url, title, time_text)
+            events.setdefault(key, RawEvent(city, current_day, title, time_text, source_url))
+    return list(events.values()), headers, rendered_event_rows
 
 
 def _displayed_count(page: Page) -> int | None:
     # The app has used both "1,234 events" and bare event-count labels.
     text = _clean_text(page.locator("body").inner_text())
-    matches = re.findall(r"(?:^|\s)([\d,]+)\s+(?:events?|results?)(?:\s|$)", text, re.I)
+    matches = re.findall(r"(?:^|\s)([\d,]+)\s+(?:(?:matching\s+)?events?|results?)(?:\s|$)", text, re.I)
     if not matches:
         return None
     return max(int(value.replace(",", "")) for value in matches)
@@ -117,13 +109,7 @@ def _clear_filters(page: Page) -> None:
         page.wait_for_timeout(500)
 
 
-def _date_button(page: Page, day: date):
-    label = day.strftime("%a, %b ") + str(day.day)
-    buttons = page.get_by_role("button", name=re.compile(re.escape(label), re.I))
-    return buttons.first if buttons.count() else None
-
-
-def collect_city(city: str, *, headless: bool = True, timeout_ms: int = 30_000) -> CityTraversal:
+def collect_city(city: str, *, headless: bool = True, timeout_ms: int = 240_000) -> CityTraversal:
     """Traverse each advertised day and capture rendered-row/count evidence."""
     city = city.lower()
     if city not in CITY_DATES:
@@ -138,47 +124,58 @@ def collect_city(city: str, *, headless: bool = True, timeout_ms: int = 30_000) 
             page = browser.new_page(viewport={"width": 1440, "height": 1200})
             page.goto(CITY_URLS[city], wait_until="networkidle", timeout=timeout_ms)
             _clear_filters(page)
-            # "Hide closed events" means the checked state hides them. Verify it
-            # and turn it off when present so closed events remain included.
-            hide_closed = page.get_by_text(re.compile(r"hide closed events", re.I))
-            if hide_closed.count():
-                checkbox = hide_closed.first.locator("xpath=ancestor::*[@role='checkbox' or self::label][1]")
-                if checkbox.count() and checkbox.get_attribute("aria-checked") == "true":
-                    checkbox.click()
-                    page.wait_for_timeout(350)
+            # The live control is a switch. aria-checked=false means closed
+            # events are included; turn filtering off if it was left on.
+            hide_closed = page.get_by_role("switch", name=re.compile(r"hide closed events", re.I))
+            if hide_closed.count() and hide_closed.first.get_attribute("aria-checked") == "true":
+                hide_closed.first.click()
+                page.wait_for_timeout(350)
             aggregate = _displayed_count(page)
+            if aggregate is None:
+                issues.append("missing city-wide displayed event count")
+            deadline = time.monotonic() + timeout_ms / 1000
+            stable_rounds = 0
+            previous_count = -1
+            headers: set[date] = set()
+            rendered_count = 0
+            while time.monotonic() < deadline:
+                all_events, headers, rendered_count = _scan_schedule(page, city)
+                current_displayed = _displayed_count(page)
+                if current_displayed is not None:
+                    aggregate = current_displayed
+                if aggregate is not None and rendered_count == aggregate and headers == set(expected):
+                    break
+                stable_rounds = stable_rounds + 1 if rendered_count == previous_count else 0
+                previous_count = rendered_count
+                if stable_rounds >= 30:
+                    issues.append("incremental schedule rendering stopped before count reconciliation")
+                    break
+                page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+                page.wait_for_timeout(500)
+            else:
+                issues.append("schedule traversal timed out")
+            counts: dict[date, int] = {day: 0 for day in expected}
+            for event in all_events:
+                counts[event.day] = counts.get(event.day, 0) + 1
             for day in expected:
-                button = _date_button(page, day)
-                if button is None:
-                    issues.append(f"missing date control {day.isoformat()}")
-                    evidence.append(DayEvidence(day, None, False))
-                    continue
-                button.click()
-                page.wait_for_timeout(650)
-                # Ensure the calendar has settled around the selected day.
-                classes = button.get_attribute("class") or ""
-                selected = (button.get_attribute("aria-pressed") == "true" or
-                            button.get_attribute("data-state") in {"active", "selected"} or
-                            bool(re.search(r"(?<!un)selected", classes, re.I)))
-                events = _settled_row_events(page, city, day)
-                # A selected empty day is valid; do not require table rows.
-                count = len(events)
-                evidence.append(DayEvidence(day, count, selected, _clean_text(button.inner_text())))
-                if not selected:
-                    issues.append(f"unconfirmed selected day {day.isoformat()}")
-                all_events.extend(events)
+                confirmed = day in headers
+                evidence.append(DayEvidence(day, counts[day] if confirmed else None, confirmed, day.strftime("%A, %b %-d")))
+                if not confirmed:
+                    issues.append(f"missing rendered day header {day.isoformat()}")
+            if aggregate != rendered_count:
+                issues.append(f"rendered row mismatch: displayed {aggregate}, rendered {rendered_count}")
         finally:
             browser.close()
     # Source URLs can appear twice in responsive markup; preserve one occurrence.
-    unique: dict[tuple[str, str, str], RawEvent] = {}
+    unique: dict[tuple[date, str, str, str], RawEvent] = {}
     for event in all_events:
-        unique.setdefault((event.source_url, event.title, event.time_text), event)
+        unique.setdefault((event.day, event.source_url, event.title, event.time_text), event)
     return CityTraversal(city, tuple(unique.values()), expected, tuple(evidence), aggregate,
                          len(evidence) == len(expected) and not issues, tuple(issues))
 
 
 def resolve_redirects(events: Iterable[RawEvent], *, concurrency: int = 8, timeout: float = 15.0,
-                      rate_limit_pause: float = 8.0) -> tuple[RawEvent, ...]:
+                      rate_limit_pause: float = 0.0) -> tuple[RawEvent, ...]:
     """Best-effort resolve all redirect links, stopping new work after a 429.
 
     A redirect that remains on Tech Week or errors is deliberately left unresolved;
@@ -188,27 +185,40 @@ def resolve_redirects(events: Iterable[RawEvent], *, concurrency: int = 8, timeo
     if not values:
         return values
     stopped = False
-    def resolve(raw: RawEvent) -> RawEvent:
-        nonlocal stopped
-        if stopped:
-            return raw
+    client = httpx.Client(follow_redirects=True, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
+
+    def resolve(raw: RawEvent) -> tuple[RawEvent, bool]:
         try:
-            with httpx.Client(follow_redirects=True, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"}) as client:
-                response = client.get(raw.source_url)
+            response = client.get(raw.source_url)
             if response.status_code == 429:
-                stopped = True
-                time.sleep(rate_limit_pause)
-                return raw
+                return raw, True
             final = str(response.url)
+            parsed = urlsplit(final)
+            host = (parsed.hostname or "").lower()
             # Do not bless an HTTP error endpoint or a still-rotating URL.
-            if response.is_error or urlsplit(final).path.startswith("/go/event/") and "tech-week.com" in urlsplit(final).netloc:
-                return raw
-            return RawEvent(raw.city, raw.day, raw.title, raw.time_text, raw.source_url, final, raw.description)
+            if response.is_error or parsed.scheme not in {"http", "https"} or not host:
+                return raw, False
+            if (host == "tech-week.com" or host.endswith(".tech-week.com")) and parsed.path.startswith("/go/event/"):
+                return raw, False
+            return RawEvent(raw.city, raw.day, raw.title, raw.time_text, raw.source_url, final, raw.description), False
         except httpx.HTTPError:
-            return raw
-    result: list[RawEvent | None] = [None] * len(values)
-    with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
-        pending = {pool.submit(resolve, raw): index for index, raw in enumerate(values)}
-        for future in as_completed(pending):
-            result[pending[future]] = future.result()
-    return tuple(item for item in result if item is not None)
+            return raw, False
+
+    result = list(values)
+    width = max(1, concurrency)
+    try:
+        for offset in range(0, len(values), width):
+            if stopped:
+                break
+            batch = values[offset:offset + width]
+            with ThreadPoolExecutor(max_workers=width) as pool:
+                pending = {pool.submit(resolve, raw): offset + index for index, raw in enumerate(batch)}
+                for future in as_completed(pending):
+                    resolved, limited = future.result()
+                    result[pending[future]] = resolved
+                    stopped = stopped or limited
+            if stopped and rate_limit_pause > 0:
+                time.sleep(rate_limit_pause)
+    finally:
+        client.close()
+    return tuple(result)
