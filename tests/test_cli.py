@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+import json
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,11 @@ def _snapshot() -> Snapshot:
                   registration_url="https://example.test/event/a", timing_quality=quality)
     event = event.with_identity(*build_identity(event))
     health = CityHealth("sf", 7, 7, 6, 1, 1, True)
-    return Snapshot((event,), (health,), datetime.now(timezone.utc), version=2)
+    evidence = {"sf": {
+        date(2026, 10, day).isoformat(): {"displayed_count": 1 if day == 5 else 0, "confirmed": True}
+        for day in range(5, 12)
+    }}
+    return Snapshot((event,), (health,), datetime.now(timezone.utc), version=2, day_evidence=evidence)
 
 
 class _Events:
@@ -55,7 +60,7 @@ def _arguments(tmp_path: Path, *extra: str) -> list[str]:
     return ["--app-dir", str(tmp_path / "app"), "--account", "a@example.test", "--calendar-id", "cal", *extra]
 
 
-def test_snapshot_dry_run_replays_reader_with_no_calendar_or_sqlite_writes(tmp_path: Path, monkeypatch) -> None:
+def test_snapshot_dry_run_replays_reader_with_no_calendar_or_sqlite_writes(tmp_path: Path, monkeypatch, capsys) -> None:
     snapshot_path = tmp_path / "source.json"; write_snapshot(snapshot_path, _snapshot())
     database = tmp_path / "app" / "state.sqlite"
     database.parent.mkdir()
@@ -69,7 +74,9 @@ def test_snapshot_dry_run_replays_reader_with_no_calendar_or_sqlite_writes(tmp_p
     monkeypatch.setattr(cli, "read_snapshot", lambda path: (calls.append(Path(path)) or original(path)))
 
     assert cli.main(["--json", *_arguments(tmp_path, "sync", "--snapshot", str(snapshot_path))]) == 0
+    report = json.loads(capsys.readouterr().out)
     assert calls == [snapshot_path]
+    assert report["actions"] == {"INSERT": 1}
     assert service.api.writes == []
     assert database.read_bytes() == committed
 
