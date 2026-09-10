@@ -12,3 +12,10 @@ token*.json
 *.sqlite
 *.sqlite-*
 *.db
+.worktrees/
+.cache/
+.env
+.env.*
+!.env.example
+*.log
+*.har
