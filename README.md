@@ -30,6 +30,22 @@ Target account: `zenmindai@gmail.com`. Target calendar: `Candidate Events`, with
 
 The CLI provides `doctor`, `auth`, `discover`, `extract`, `calendar-inventory`, and `sync`. Sync supports `--snapshot FILE`, defaults to dry-run, and requires `--apply` for writes. `--limit` caps all mutations, including adoption and updates. Source/event filters never imply city-wide disappearance.
 
+## Commands
+
+All commands accept explicit `--app-dir`, `--database`, `--lock`, `--token`, `--client`, `--account`, and `--calendar-id` paths/identifiers when the defaults are unsuitable. The default app directory is `~/Library/Application Support/techweek-etl/`.
+
+```sh
+uv run techweek-etl doctor
+uv run techweek-etl auth --client /secure/client_secret.json --token /secure/token.json
+uv run techweek-etl discover --city sf
+uv run techweek-etl extract --city sf --output /secure/sf-snapshot.json
+uv run techweek-etl calendar-inventory --output /secure/calendar.json
+uv run techweek-etl sync --snapshot /secure/sf-snapshot.json          # dry-run
+uv run techweek-etl sync --snapshot /secure/sf-snapshot.json --apply --limit 10
+```
+
+`auth` is the only command that opens a browser. Every command takes the same application lock. A saved snapshot is replayed through the same reconciliation path as a live extraction.
+
 Network access, Playwright browser launches, macOS Keychain access through `gog`, and writes outside the workspace may require elevated execution. Deterministic tests and snapshot replay can use workspace-local paths. A daily LaunchAgent must use absolute paths and the installed virtual-environment executable.
 
 Installation and command examples will be finalized with the implemented CLI and operational checks. No production sync or scheduler has been enabled yet.

@@ -11,6 +11,9 @@ dependencies = [
   "playwright>=1.48,<2",
 ]
 
+[project.scripts]
+techweek-etl = "techweek_etl.cli:main"
+
 [dependency-groups]
 dev = ["pytest>=8,<9"]
 
