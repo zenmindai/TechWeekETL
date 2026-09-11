@@ -288,7 +288,11 @@ def resolve_redirects(events: Iterable[RawEvent], *, concurrency: int = 8, timeo
             return raw, False
 
     result = list(values)
-    pending_values = tuple((index, raw) for index, raw in enumerate(values) if not raw.registration_url)
+    pending_values = tuple(
+        (index, raw)
+        for index, raw in enumerate(values)
+        if not raw.registration_url and _is_techweek_host(raw.source_url)
+    )
     width = max(1, concurrency)
     try:
         for offset in range(0, len(pending_values), width):
@@ -305,10 +309,14 @@ def resolve_redirects(events: Iterable[RawEvent], *, concurrency: int = 8, timeo
                 time.sleep(rate_limit_pause)
     finally:
         client.close()
-    unresolved = tuple(raw for raw in result if not raw.registration_url and _is_techweek_host(raw.source_url))
+    unresolved_indices = [
+        index for index, raw in enumerate(result)
+        if not raw.registration_url and _is_techweek_host(raw.source_url)
+    ]
+    unresolved = tuple(result[index] for index in unresolved_indices)
     if unresolved:
         recovered = browser_fallback(unresolved, concurrency=max(1, browser_concurrency),
                                      timeout_ms=max(1, browser_timeout_ms))
-        by_source = {raw.source_url: raw for raw in recovered}
-        result = [by_source.get(raw.source_url, raw) if raw in unresolved else raw for raw in result]
+        for index, recovered_raw in zip(unresolved_indices, recovered):
+            result[index] = _with_external_destination(result[index], recovered_raw.registration_url)
     return tuple(result)

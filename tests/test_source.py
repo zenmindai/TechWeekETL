@@ -151,8 +151,7 @@ def test_browser_fallback_recovers_only_unresolved_techweek_links(monkeypatch):
     monkeypatch.setattr(browser.httpx, "Client", Client)
     raw = (
         browser.RawEvent("sf", date(2026, 10, 5), "Browser", "9:00am", "https://tech-week.com/go/event/browser"),
-        browser.RawEvent("sf", date(2026, 10, 5), "Direct", "10:00am", "https://tickets.example/direct",
-                         "https://tickets.example/existing"),
+        browser.RawEvent("sf", date(2026, 10, 5), "Direct", "10:00am", "https://tickets.example/direct"),
     )
 
     resolved = browser.resolve_redirects(raw, browser_concurrency=3, browser_timeout_ms=4_000,
@@ -160,7 +159,39 @@ def test_browser_fallback_recovers_only_unresolved_techweek_links(monkeypatch):
 
     assert seen == {"sources": [raw[0].source_url], "concurrency": 3, "timeout_ms": 4_000}
     assert resolved[0].registration_url == "https://partiful.example/0"
-    assert resolved[1].registration_url == "https://tickets.example/existing"
+    assert not resolved[1].registration_url
+
+
+def test_browser_fallback_preserves_duplicate_source_row_details(monkeypatch):
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        def get(self, url):
+            return type("Response", (), {"status_code": 200, "url": url})()
+
+        def close(self):
+            pass
+
+    def fallback(values, **_):
+        return tuple(
+            browser.RawEvent("la", date(2026, 10, 18), "Wrong row", "1:00am", item.source_url,
+                             "https://partiful.example/shared", "wrong description")
+            for item in values
+        )
+
+    monkeypatch.setattr(browser.httpx, "Client", Client)
+    raw = (
+        browser.RawEvent("sf", date(2026, 10, 5), "First", "9:00am", "https://tech-week.com/go/event/shared", description="one"),
+        browser.RawEvent("sf", date(2026, 10, 6), "Second", "10:00am", "https://tech-week.com/go/event/shared", description="two"),
+    )
+
+    resolved = browser.resolve_redirects(raw, browser_fallback=fallback)
+
+    assert [(item.city, item.day, item.title, item.time_text, item.description) for item in resolved] == [
+        (item.city, item.day, item.title, item.time_text, item.description) for item in raw
+    ]
+    assert [item.registration_url for item in resolved] == ["https://partiful.example/shared"] * 2
 
 
 def test_browser_fallback_retains_external_404_and_stops_after_429(monkeypatch):

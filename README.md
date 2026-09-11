@@ -6,7 +6,7 @@ Implementation is in progress. The authoritative [project plan](research/project
 
 ## Identity and safety
 
-Tech Week `/go/event/...` links rotate. Identity v1 uses **year + city + canonical registration destination**, removing recognized tracking parameters only. Redirects first use bounded HTTP resolution and then a bounded Chromium fallback for unresolved Tech Week links; either path may retain an external destination that returns 404, since closed events remain in scope. No Tech Week host is a canonical destination. Direct Tech Week links remain available in descriptions but their rotating tokens and retrieval timestamps do not trigger updates. Unresolved title/time collisions are withheld for review rather than merged.
+Tech Week `/go/event/...` links rotate. Identity v1 uses **year + city + canonical registration destination**, removing recognized tracking parameters only. Redirects first use bounded HTTP resolution and then a bounded Chromium fallback for unresolved Tech Week links; an HTTP 429 hands remaining links to Chromium, while a Chromium 429 stops that transport. Either path may retain an external destination that returns 404, since closed events remain in scope. No Tech Week host is a canonical destination. Direct Tech Week links remain available in descriptions but their rotating tokens and retrieval timestamps do not trigger updates. Unresolved title/time collisions are withheld for review rather than merged.
 
 Each city must complete all seven dates, reconcile displayed counts, account for zero-event dates, validate normalized records, and retain at least 80% of its previous healthy count. An unhealthy city cannot trigger Calendar writes or missing-source conclusions, or replace its healthy baseline.
 

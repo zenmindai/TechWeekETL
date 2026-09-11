@@ -14,7 +14,8 @@ targets because the program changes over time.
 
 `/go/event` links are rotating redirects. Resolution first uses bounded HTTP
 requests and then a single Chromium process with a bounded page pool for
-unresolved Tech Week links; either stage stops further requests after a 429.
+unresolved Tech Week links. An HTTP 429 deliberately hands remaining links to
+Chromium; a Chromium 429 stops further Chromium dispatch.
 An external final URL remains the destination even if its page returns 404,
 because closed events remain part of discovery. Tech Week hosts are never
 canonical destinations. If separate unresolved source links share a city, date,
