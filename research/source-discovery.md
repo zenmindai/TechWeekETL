@@ -12,5 +12,10 @@ evidence. The total display is reconciled with the aggregate of per-day rows.
 Counts observed in the live site are diagnostic evidence rather than fixed test
 targets because the program changes over time.
 
-`/go/event` links are rotating redirects. Redirect resolution is best effort,
-bounded and circuit-breaks after a 429; unresolved links stay fallback identities.
+`/go/event` links are rotating redirects. Resolution first uses bounded HTTP
+requests and then a single Chromium process with a bounded page pool for
+unresolved Tech Week links; either stage stops further requests after a 429.
+An external final URL remains the destination even if its page returns 404,
+because closed events remain part of discovery. Tech Week hosts are never
+canonical destinations. If separate unresolved source links share a city, date,
+title, and time, discovery defers the group for review instead of merging it.

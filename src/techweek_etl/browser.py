@@ -5,6 +5,7 @@ ephemeral, so this module keeps the browser work isolated from normalization.
 """
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date
@@ -14,6 +15,7 @@ from typing import Iterable
 from urllib.parse import urljoin, urlsplit
 
 import httpx
+from playwright.async_api import Error as AsyncPlaywrightError, async_playwright
 from playwright.sync_api import Browser, Page, sync_playwright
 
 CITY_DATES = {
@@ -192,12 +194,82 @@ def collect_city(city: str, *, headless: bool = True, timeout_ms: int = 240_000)
                          len(evidence) == len(expected) and not issues, tuple(issues))
 
 
+def _is_techweek_host(url: str) -> bool:
+    host = (urlsplit(url).hostname or "").lower()
+    return host == "tech-week.com" or host.endswith(".tech-week.com")
+
+
+def _with_external_destination(raw: RawEvent, final: str) -> RawEvent:
+    """Keep a destination only after a redirect leaves every Tech Week host."""
+    parsed = urlsplit(final)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or _is_techweek_host(final):
+        return raw
+    return RawEvent(raw.city, raw.day, raw.title, raw.time_text, raw.source_url, final, raw.description)
+
+
+def resolve_redirects_in_browser(events: Iterable[RawEvent], *, concurrency: int = 2,
+                                timeout_ms: int = 30_000) -> tuple[RawEvent, ...]:
+    """Resolve a bounded set of unresolved Tech Week links with Chromium.
+
+    Chromium follows redirect behavior that rejects plain HTTP clients. It uses
+    one browser process and at most ``concurrency`` concurrent pages. A 429
+    stops workers from dispatching another unresolved link.
+    """
+    values = tuple(events)
+    if not values:
+        return values
+
+    async def resolve_all() -> tuple[RawEvent, ...]:
+        result = list(values)
+        queue: asyncio.Queue[tuple[int, RawEvent]] = asyncio.Queue()
+        for index, raw in enumerate(values):
+            queue.put_nowait((index, raw))
+        stopped = asyncio.Event()
+        width = min(len(values), max(1, concurrency))
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            try:
+                async def worker() -> None:
+                    page = await browser.new_page()
+                    page.set_default_navigation_timeout(max(1, timeout_ms))
+                    try:
+                        while not stopped.is_set():
+                            try:
+                                index, raw = queue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                return
+                            if stopped.is_set():
+                                queue.task_done()
+                                return
+                            try:
+                                response = await page.goto(raw.source_url, wait_until="commit")
+                                if response is not None and response.status == 429:
+                                    stopped.set()
+                                else:
+                                    result[index] = _with_external_destination(raw, page.url)
+                            except AsyncPlaywrightError:
+                                pass
+                            finally:
+                                queue.task_done()
+                    finally:
+                        await page.close()
+
+                await asyncio.gather(*(worker() for _ in range(width)))
+            finally:
+                await browser.close()
+        return tuple(result)
+
+    return asyncio.run(resolve_all())
+
+
 def resolve_redirects(events: Iterable[RawEvent], *, concurrency: int = 8, timeout: float = 15.0,
-                      rate_limit_pause: float = 0.0) -> tuple[RawEvent, ...]:
+                      rate_limit_pause: float = 0.0, browser_concurrency: int = 2,
+                      browser_timeout_ms: int = 30_000, browser_fallback=resolve_redirects_in_browser) -> tuple[RawEvent, ...]:
     """Best-effort resolve all redirect links, stopping new work after a 429.
 
-    A redirect that remains on Tech Week or errors is deliberately left unresolved;
-    it must not become a false canonical destination.
+    HTTP failures are retained when they landed on an external registration URL:
+    closed events remain included, and the external path is their stable identity.
+    Unresolved Tech Week links receive a bounded Chromium fallback.
     """
     values = tuple(events)
     if not values:
@@ -211,26 +283,20 @@ def resolve_redirects(events: Iterable[RawEvent], *, concurrency: int = 8, timeo
             if response.status_code == 429:
                 return raw, True
             final = str(response.url)
-            parsed = urlsplit(final)
-            host = (parsed.hostname or "").lower()
-            # Do not bless an HTTP error endpoint or a still-rotating URL.
-            if response.is_error or parsed.scheme not in {"http", "https"} or not host:
-                return raw, False
-            if host == "tech-week.com" or host.endswith(".tech-week.com"):
-                return raw, False
-            return RawEvent(raw.city, raw.day, raw.title, raw.time_text, raw.source_url, final, raw.description), False
+            return _with_external_destination(raw, final), False
         except httpx.HTTPError:
             return raw, False
 
     result = list(values)
+    pending_values = tuple((index, raw) for index, raw in enumerate(values) if not raw.registration_url)
     width = max(1, concurrency)
     try:
-        for offset in range(0, len(values), width):
+        for offset in range(0, len(pending_values), width):
             if stopped:
                 break
-            batch = values[offset:offset + width]
+            batch = pending_values[offset:offset + width]
             with ThreadPoolExecutor(max_workers=width) as pool:
-                pending = {pool.submit(resolve, raw): offset + index for index, raw in enumerate(batch)}
+                pending = {pool.submit(resolve, raw): index for index, raw in batch}
                 for future in as_completed(pending):
                     resolved, limited = future.result()
                     result[pending[future]] = resolved
@@ -239,4 +305,10 @@ def resolve_redirects(events: Iterable[RawEvent], *, concurrency: int = 8, timeo
                 time.sleep(rate_limit_pause)
     finally:
         client.close()
+    unresolved = tuple(raw for raw in result if not raw.registration_url and _is_techweek_host(raw.source_url))
+    if unresolved:
+        recovered = browser_fallback(unresolved, concurrency=max(1, browser_concurrency),
+                                     timeout_ms=max(1, browser_timeout_ms))
+        by_source = {raw.source_url: raw for raw in recovered}
+        result = [by_source.get(raw.source_url, raw) if raw in unresolved else raw for raw in result]
     return tuple(result)

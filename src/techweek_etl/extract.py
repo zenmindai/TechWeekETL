@@ -32,6 +32,18 @@ def normalize_city_traversal(traversal: CityTraversal, *, previous_healthy_count
     expected = tuple(CITY_DATES.get(city, traversal.expected_days))
     rejected: list[RejectedRecord] = []
     events: list[Event] = []
+    occurrence_groups: dict[tuple[object, str, str], list[RawEvent]] = defaultdict(list)
+    for raw in traversal.raw_events:
+        if raw.city.lower() == city and raw.day in expected:
+            occurrence_groups[(raw.day, raw.title.strip().casefold(), raw.time_text.strip().casefold())].append(raw)
+    ambiguous_unresolved = {
+        key: {raw.source_url for raw in group}
+        for key, group in occurrence_groups.items()
+        if len({raw.source_url for raw in group}) > 1 and any(not raw.registration_url for raw in group)
+    }
+    for (day, title, time_text), sources in ambiguous_unresolved.items():
+        rejected.append(RejectedRecord("ambiguous_unresolved_occurrence", "",
+                                       f"{day.isoformat()} | {title} | {time_text} | {', '.join(sorted(sources))}", city))
     seen_source: set[tuple[object, str, str, str]] = set()
     for raw in traversal.raw_events:
         if raw.city.lower() != city or raw.day not in expected:
@@ -41,6 +53,9 @@ def normalize_city_traversal(traversal: CityTraversal, *, previous_healthy_count
         if key in seen_source:
             continue
         seen_source.add(key)
+        unresolved_key = raw.day, raw.title.strip().casefold(), raw.time_text.strip().casefold()
+        if unresolved_key in ambiguous_unresolved:
+            continue
         try:
             clock = _time_from_text(raw.time_text)
             if clock is None:
