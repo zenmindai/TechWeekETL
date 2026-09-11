@@ -42,7 +42,7 @@ uv run techweek-etl extract --city sf --output /secure/sf-snapshot.json
 uv run techweek-etl calendar-inventory --output /secure/calendar.json
 uv run techweek-etl sync --snapshot /secure/sf-snapshot.json          # dry-run
 uv run techweek-etl sync --snapshot /secure/sf-snapshot.json --apply --limit 10
-uv run techweek-etl sync --snapshot /secure/sf-snapshot.json --identity '2026:sf:…' --apply
+uv run techweek-etl sync --snapshot /secure/sf-snapshot.json --identity 'v1:2026:sf:https://tickets.example/event-id' --apply
 ```
 
 `auth` is the only command that opens a browser. Every command takes the same application lock. A saved snapshot is replayed through the same reconciliation path as a live extraction. Use repeatable `--identity ID` only with `sync --snapshot` to select exact reviewed events; the complete snapshot is planned before the selection is applied.
