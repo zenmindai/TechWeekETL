@@ -17,7 +17,7 @@ from .auth import authorize_desktop, build_calendar_service
 from .browser import collect_city
 from .calendar import ACCOUNT_EMAIL, CANDIDATE_CALENDAR_ID, inventory_events, verify_calendar_access
 from .config import Settings
-from .diff import PlanItem, plan_sync
+from .diff import PlanItem, SyncPlan, plan_sync
 from .executor import execute_plan
 from .extract import extract_snapshot
 from .snapshots import read_snapshot, write_snapshot
@@ -41,6 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync = commands.add_parser("sync", help="plan a sync; dry-run is the default")
     sync.add_argument("--snapshot", type=Path, help="replay this saved source snapshot")
     sync.add_argument("--city", choices=("sf", "la"), action="append", dest="cities", help="city to collect when no snapshot is given")
+    sync.add_argument("--identity", action="append", dest="identities", help="snapshot event identity to select (repeatable)")
     sync.add_argument("--apply", action="store_true", help="allow Calendar and SQLite mutations")
     sync.add_argument("--limit", type=int, help="maximum total mutations")
     # argparse normally accepts global options only before the subcommand. Make
@@ -90,6 +91,12 @@ def _plan_report(items: Sequence[PlanItem]) -> dict[str, Any]:
         counts[item.action] = counts.get(item.action, 0) + 1
     return {"actions": counts, "items": [
         {"action": item.action, "identity": item.event.identity if item.event else None,
+         "city": item.event.city if item.event else None,
+         "title": item.event.title if item.event else None,
+         "start": item.event.start.isoformat() if item.event else None,
+         "end": item.event.end.isoformat() if item.event else None,
+         "registration_url": item.event.registration_url if item.event else None,
+         "source_url": item.event.source_url if item.event else None,
          "calendar_event_id": item.calendar_event.get("id") if item.calendar_event else None, "reason": item.reason}
         for item in items
     ]}
@@ -133,6 +140,8 @@ def main(argv: Sequence[str] | None = None, *, collector: Callable[[str], Any] =
             return 0
         if args.command == "sync" and args.snapshot and args.cities:
             raise SystemExit("--city cannot be combined with --snapshot; replay uses the snapshot's complete city evidence")
+        if args.command == "sync" and args.identities and not args.snapshot:
+            raise SystemExit("--identity requires --snapshot so selection has complete source evidence")
         service = build_calendar_service(token_path)
         target = verify_calendar_access(service, args.calendar_id, expected_account=args.account)
         inventory = inventory_events(service, target)
@@ -152,12 +161,28 @@ def main(argv: Sequence[str] | None = None, *, collector: Callable[[str], Any] =
                 previous = {city: state.get_baseline(city) for city in _cities(args)}
                 snapshot = extract_snapshot(_cities(args), previous, collector=collector)
             plan = plan_sync(snapshot, inventory, state)
+            if args.identities:
+                wanted = set(args.identities)
+                selected: list[PlanItem] = []
+                for identity in wanted:
+                    matches = [item for item in plan.items if item.event and item.event.identity == identity]
+                    if not matches:
+                        raise SystemExit(f"requested identity is absent from the complete plan: {identity}")
+                    if len(matches) != 1:
+                        raise SystemExit(f"requested identity is ambiguous in the complete plan: {identity}")
+                selected = [item for item in plan.items if item.event and item.event.identity in wanted]
+                # Keep the complete health verdict, while executing only the
+                # explicit user selection. This never treats unselected source
+                # events or cities as disappeared.
+                plan = SyncPlan(tuple(selected), plan.healthy_cities)
             completed = execute_plan(service, target, plan, state, apply=args.apply, limit=args.limit)
             incomplete_execution = any(
                 "write failed" in item.reason or "mutation limit reached" in item.reason
                 for item in completed
             )
-            if args.apply and not incomplete_execution:
+            # An explicit identity selection is a controlled partial apply, so
+            # it cannot establish a complete source baseline either.
+            if args.apply and not args.identities and not incomplete_execution:
                 with state.transaction():
                     for health in snapshot.city_health:
                         # plan_sync incorporates the durable baseline gate. Do

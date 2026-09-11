@@ -14,17 +14,22 @@ from techweek_etl.snapshots import write_snapshot
 from techweek_etl.state import AppLock, StateStore
 
 
-def _snapshot() -> Snapshot:
+def _snapshot(*, second: bool = False) -> Snapshot:
     start, end, _, quality = normalize_event_timing(datetime(2026, 10, 5, 9))
     event = Event("sf", "CLI fixture", start, end, source_url="https://www.tech-week.com/go/event/a",
                   registration_url="https://example.test/event/a", timing_quality=quality)
     event = event.with_identity(*build_identity(event))
-    health = CityHealth("sf", 7, 7, 6, 1, 1, True)
+    events = [event]
+    if second:
+        other = Event("sf", "Second CLI fixture", start, end, source_url="https://www.tech-week.com/go/event/b",
+                      registration_url="https://example.test/event/b", timing_quality=quality)
+        events.append(other.with_identity(*build_identity(other)))
+    health = CityHealth("sf", 7, 7, 6, len(events), len(events), True)
     evidence = {"sf": {
-        date(2026, 10, day).isoformat(): {"displayed_count": 1 if day == 5 else 0, "confirmed": True}
+        date(2026, 10, day).isoformat(): {"displayed_count": len(events) if day == 5 else 0, "confirmed": True}
         for day in range(5, 12)
     }}
-    return Snapshot((event,), (health,), datetime.now(timezone.utc), version=2, day_evidence=evidence)
+    return Snapshot(tuple(events), (health,), datetime.now(timezone.utc), version=2, day_evidence=evidence)
 
 
 class _Events:
@@ -77,6 +82,12 @@ def test_snapshot_dry_run_replays_reader_with_no_calendar_or_sqlite_writes(tmp_p
     report = json.loads(capsys.readouterr().out)
     assert calls == [snapshot_path]
     assert report["actions"] == {"INSERT": 1}
+    assert report["items"][0] == {
+        "action": "INSERT", "identity": _snapshot().events[0].identity, "city": "sf", "title": "CLI fixture",
+        "start": _snapshot().events[0].start.isoformat(), "end": _snapshot().events[0].end.isoformat(),
+        "registration_url": "https://example.test/event/a", "source_url": "https://www.tech-week.com/go/event/a",
+        "calendar_event_id": None, "reason": "new canonical event",
+    }
     assert service.api.writes == []
     assert database.read_bytes() == committed
 
@@ -135,3 +146,38 @@ def test_incomplete_apply_does_not_advance_baseline(tmp_path: Path, monkeypatch,
     assert cli.main(_arguments(tmp_path, "sync", "--snapshot", str(snapshot_path), "--apply")) == 0
     with StateStore(tmp_path / "app" / "state.sqlite", read_only=True) as state:
         assert state.get_baseline("sf") is None
+
+
+def test_identity_selection_plans_complete_snapshot_then_applies_selected_item(tmp_path: Path, monkeypatch) -> None:
+    snapshot = _snapshot(second=True); snapshot_path = tmp_path / "source.json"; write_snapshot(snapshot_path, snapshot)
+    service = _Service(); _patch_calendar(monkeypatch, service)
+    observed = {}
+
+    def full_plan(source, _inventory, _state):
+        observed["source_identities"] = [event.identity for event in source.events]
+        return cli.SyncPlan(tuple(PlanItem("INSERT", event, reason="fixture") for event in source.events), frozenset({"sf"}))
+
+    def execute(_service, _target, plan, _state, *, apply, limit):
+        observed["executed"] = plan.items
+        observed["apply"] = apply
+        return list(plan.items)
+
+    monkeypatch.setattr(cli, "plan_sync", full_plan)
+    monkeypatch.setattr(cli, "execute_plan", execute)
+    chosen = snapshot.events[1].identity
+    assert cli.main(_arguments(tmp_path, "sync", "--snapshot", str(snapshot_path), "--identity", chosen, "--apply")) == 0
+    assert observed["source_identities"] == [event.identity for event in snapshot.events]
+    assert [item.event.identity for item in observed["executed"]] == [chosen]
+    assert observed["apply"] is True
+
+
+def test_identity_selection_rejects_unknown_and_ambiguous_identity(tmp_path: Path, monkeypatch) -> None:
+    snapshot = _snapshot(); snapshot_path = tmp_path / "source.json"; write_snapshot(snapshot_path, snapshot)
+    service = _Service(); _patch_calendar(monkeypatch, service)
+    with pytest.raises(SystemExit, match="absent"):
+        cli.main(_arguments(tmp_path, "sync", "--snapshot", str(snapshot_path), "--identity", "unknown"))
+
+    event = snapshot.events[0]
+    monkeypatch.setattr(cli, "plan_sync", lambda *_: cli.SyncPlan((PlanItem("INSERT", event), PlanItem("REVIEW", event)), frozenset({"sf"})))
+    with pytest.raises(SystemExit, match="ambiguous"):
+        cli.main(_arguments(tmp_path, "sync", "--snapshot", str(snapshot_path), "--identity", event.identity))
