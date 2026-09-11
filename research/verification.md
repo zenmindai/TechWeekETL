@@ -1,42 +1,49 @@
 # Independent implementation verification
 
-Authority: `research/project-plan.md` in the main worktree.
+**Last updated:** 2026-09-10 20:36:44 CDT
 
-No implementation has been verified yet. Foundation `src/` and `tests/` were empty at initial inspection.
+**Authority:** [`research/project-plan.md`](project-plan.md)
 
-## Required evidence
+**Handoff status:** [`research/project-status.md`](project-status.md)
 
-- Identity: rotating Tech Week tokens resolve to one destination identity; recognized tracking removal preserves meaningful query values and paths; destination collisions between distinct occurrences require review; fingerprints exclude retrieval time and rotating direct links.
-- Timing: Pacific interpretation under a Chicago host; local midnight; exclusive all-day end; DST boundary behavior; default duration and date-only fallback.
-- Health: missing days, partial rendering, count mismatch, rejected normalization, or an 80% baseline collapse block affected-city writes and missing-source conclusions. Unhealthy runs retain healthy baselines.
-- State: durable successful payloads and identity mappings; one lock shared across manual and scheduled commands; failure releases locks; dry runs preserve committed sync state.
-- Calendar: complete paginated inventory; marker and foreign-owner protection; unique exact-link adoption; ambiguous matching becomes review; notes and user settings preserved; ETag reread/recompute; deterministic retry-safe insertion; dismissals persist; per-write recovery; bounded total mutations.
-- Integration: identical snapshot replay and normal diff behavior; city filters cannot imply disappearance; default zero-write sync; explicit apply; deterministic credential-free checks.
-- Operations: absolute scheduler paths, unattended authentication preflight, logging, overlap lock, and documented removal.
+## Current result
 
-## Results
+Independent verification against `main` at implementation baseline `d828863` ran:
 
-Pending implementation availability. No tests claimed passing.
+```sh
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider
+```
 
-### Foundation initial review (2026-09-09)
+Result: **56 passed** under Python 3.13. The check was read-only and changed no repository files.
 
-Executed independent unittest probes against `/private/tmp/techweek-foundation/src` using system Python 3.14.7; pinned Python 3.13 validation remains pending. Initial run: ten test methods, five passing methods, five failing methods (seven failed assertions including query subtests). Regression coverage lives in `tests/test_review_regressions.py`.
+| Area | Verification status | Commit evidence |
+|---|---|---|
+| Foundation | Approved | `fda2365`, `a1549fc`, `838bd73` |
+| Source extraction and snapshots | Offline regression coverage passes; LA live traversal verified; SF correctly fails closed | `9ec3210`, `e599360`, `dc080b7`, `0b8357c`, `8dcdda3`, `f7d8711`, `5bdb20e`, `2769f5c` |
+| Calendar inventory and pure reconciliation | Offline regression coverage passes; complete live paginated inventory verified | `98ce6d7`, `cf54140` |
+| Integrated dry run | Approved, including a healthy plan containing an insert with zero writes and no committed-state change | `e432711`, `ac5722d`, `7901d42`, `1084cfe` |
+| Controlled writes | Ten LA inserts and identical-snapshot idempotence verified live | `d828863` |
+| Operations | Not verified or implemented | No CI workflow or LaunchAgent exists |
 
-Confirmed findings sent directly to foundation builder and coordinator:
+## Acceptance evidence
 
-1. **P1 health fail-open:** `CityHealth('sf', 7, 1, 0, 5, 5, True).healthy` returns true despite six missing days. `displayed_count=None` also passes reconciliation.
-2. **P1 identity collisions:** globally dropping `ref`, `source`, and `referrer` erases potentially meaningful registration selectors; dropping all fragments merges distinct hash-based event routes.
-3. **P1 rotating fallback:** unresolved `https://www.tech-week.com/go/event/{token}` destinations receive canonical identities, violating token independence. Added an eleventh regression method after initial run.
-4. **P2 Pacific date fallback:** `2026-06-02T01:00Z` with `has_time=False` becomes June 2 rather than Pacific June 1.
+- **Identity:** Tests cover recognized tracking removal, preservation of meaningful path/query values, rotating-link material-hash stability, Tech Week host rejection, collision review, and distinct resolved registrations.
+- **Timing:** Tests cover explicit Pacific interpretation on a Chicago host, local midnight, exclusive all-day ends, date-only fallback, and default duration.
+- **Health:** Tests cover missing days, count mismatches, unexpected dates, malformed/rejected records, snapshot evidence round trips, city-scoped rejection behavior, and the 80% healthy-baseline guard.
+- **State:** Tests cover transactional rollback, read-only operation, lock overlap/release, preservation of dismissals and successful payloads, and guarded baseline persistence.
+- **Calendar:** Tests cover paginated inventory, protected markers/foreign ownership, exact-link adoption, ambiguous review, deterministic IDs, field preservation, conditional execution paths, and bounded mutations.
+- **Integration:** Tests cover snapshot replay, complete-plan-before-selection behavior, dry-run zero writes, explicit apply, and explicit reviewed identity selection.
 
-Passing probes: ordinary tracking removal, resolved rotating-link identity/material-hash stability, naive Pacific timed normalization, transactional rollback/read-only mutation guard with unchanged database bytes, overlapping lock rejection and release after exceptions.
+## Verification still required
 
-Foundation integration remains withheld pending corrected regressions and its implementation test suite. Calendar/dismissal/payload recovery and source health integration are not yet reviewed.
+- Wire `resolved_links` through the CLI so adoption across different rotating Tech Week URLs works in the normal command path.
+- Add focused end-to-end regressions for interrupted inserts, ETag reread/recompute, and cancellation/manual-deletion dismissal behavior.
+- Resolve the SF October 16 and October 28 policy and obtain a healthy SF live run.
+- Exercise adoption of the two known untagged SF events only after healthy canonical resolution.
+- Complete SF and LA separately rather than treating the ten-event LA trial as a full import.
+- Verify OAuth consent status and refresh-token longevity.
+- Add and verify credential-free CI and user LaunchAgent operations, including absolute paths, noninteractive execution, logs, overlap locking, unloading, and removal.
 
-### Foundation corrected review — approved for milestone integration
+## Historical foundation review
 
-Independently reran the completed implementation with its locked `.venv/bin/python` (Python 3.13.14): `python -m pytest -q tests /private/tmp/techweek-verify/tests/test_review_regressions.py` reported **24 passed** (11 builder tests, 13 independent methods).
-
-All initial findings are corrected. Additional coverage checks unresolved rotating destinations on both www/apex hosts and explicit port 443, including material-hash stability. First-use read-only state creates no durable directory or database. A newly discovered routine-upsert dismissal reset was reproduced, fixed by the builder, and verified: DISMISSED tombstones and previous successful payloads survive mapping refresh.
-
-**Foundation milestone approved.** This approval covers the inspected foundation code and the above deterministic checks. Source extraction, Calendar behavior, integrated dry-run orchestration, live writes, and unattended operations remain separately unverified. Source-specific occurrence conflict handling and health-gated baseline writes belong to later integration checks.
+The first independent foundation review on 2026-09-09 found fail-open health checks, overly broad URL canonicalization, rotating Tech Week fallback identities, Pacific date fallback errors, and state-upsert loss of dismissal/payload data. The implementation and regressions in `fda2365` and `a1549fc` corrected those findings; `838bd73` recorded 24 passing foundation checks under Python 3.13. Later integration brought the deterministic suite to the 56 passing tests reported above.

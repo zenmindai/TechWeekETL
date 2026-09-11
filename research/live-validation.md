@@ -1,5 +1,11 @@
 # Local live validation
 
+**Last updated:** 2026-09-10 20:36:44 CDT
+
+**Implementation baseline:** `d828863`
+
+**Overall handoff:** [`research/project-status.md`](project-status.md)
+
 These observations are local checks, not offline-test fixtures or proof that the full import has completed.
 
 ## Calendar reads
@@ -34,4 +40,4 @@ Ten explicit canonical LA identities were selected from the complete snapshot pl
 
 A fresh native inventory found 110 total records and exactly ten `techweek_etl`-managed LA events. All ten are transparent, use Pacific event timing, contain the delimited managed description block, and have no attendees or conference data. Both protected Tech Week markers and all 47 detected foreign sync-managed records remain present. Explicit partial selection did not advance a city-wide healthy baseline.
 
-No LaunchAgent has been installed. Remaining live gates are: resolve or explicitly retain the SF out-of-window block; validate adoption of the two known untagged SF imports after SF becomes healthy; complete any further user-selected LA import; verify OAuth refresh-token longevity; and only then enable daily scheduling.
+No LaunchAgent has been installed. “Out of window” means that the SF source contains event sections dated October 16 and October 28, outside the configured October 5–11 SF interval. It does not refer to extraction time or snapshot age. Remaining live gates are: define and verify the SF out-of-window policy; obtain a healthy SF run; validate adoption of the two known untagged SF imports; complete SF and LA separately; exercise controlled update/deletion/recovery cases; verify OAuth consent status and refresh-token longevity; and only then enable daily scheduling.

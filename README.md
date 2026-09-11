@@ -2,7 +2,7 @@
 
 Local macOS ETL for discovering SF and LA Tech Week 2026 events and importing useful candidates into Google Calendar. Completeness, duplicate prevention, source links, approximate Pacific scheduling, and preservation of user decisions take priority.
 
-Implementation is in progress. The authoritative [project plan](research/project-plan.md) defines acceptance gates; [original research](research/README.md) is historical and may contain superseded assumptions.
+Implementation is in progress. The authoritative [project plan](research/project-plan.md) defines acceptance gates; the timestamped [project status and session handoff](research/project-status.md) records current completion, commit evidence, known gaps, and next work. [Original research](research/README.md) is historical and may contain superseded assumptions.
 
 ## Identity and safety
 
@@ -16,7 +16,7 @@ Calendar sync defaults to dry-run. Managed events use deterministic Google IDs. 
 
 ## Development workflow
 
-Use Python 3.13, a repository-local `.venv`, an ignored local uv cache, and committed `uv.lock`. Install the Chromium revision matching the locked Playwright package. Offline CI needs no Google credentials.
+Use Python 3.13, a repository-local `.venv`, an ignored local uv cache, and committed `uv.lock`. Install the Chromium revision matching the locked Playwright package. The deterministic tests need no Google credentials and are suitable for CI; no CI workflow has been committed yet.
 
 The coordinator establishes shared interfaces and integrates verified changes. At most two `gpt-5.6-terra` build agents and one `gpt-6-astra` verifier (low reasoning effort) work in isolated Git worktrees with explicit ownership. Terra implements fixes; Astra independently verifies the revisions. No nested agents.
 
@@ -45,8 +45,8 @@ uv run techweek-etl sync --snapshot /secure/sf-snapshot.json --apply --limit 10
 uv run techweek-etl sync --snapshot /secure/sf-snapshot.json --identity 'v1:2026:sf:https://tickets.example/event-id' --apply
 ```
 
-`auth` is the only command that opens a browser. Every command takes the same application lock. A saved snapshot is replayed through the same reconciliation path as a live extraction. Use repeatable `--identity ID` only with `sync --snapshot` to select exact reviewed events; the complete snapshot is planned before the selection is applied.
+`auth` is the only command that opens an interactive authentication browser; source extraction also launches headless Chromium. Every command takes the same application lock. A saved snapshot is replayed through the same reconciliation path as a live extraction. Use repeatable `--identity ID` only with `sync --snapshot` to select exact reviewed events; the complete snapshot is planned before the selection is applied.
 
 Network access, Playwright browser launches, macOS Keychain access through `gog`, and writes outside the workspace may require elevated execution. Deterministic tests and snapshot replay can use workspace-local paths. A daily LaunchAgent must use absolute paths and the installed virtual-environment executable.
 
-Installation and command examples will be finalized with the implemented CLI and operational checks. No production sync or scheduler has been enabled yet.
+The controlled production trial inserted ten explicitly selected LA events and verified an identical replay with zero additional writes. No full-city sync, unattended sync, or scheduler has been enabled. See the [current handoff](research/project-status.md) and [live-validation record](research/live-validation.md) before performing additional Calendar writes.
