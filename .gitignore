@@ -8,6 +8,7 @@ __pycache__/
 data/
 snapshots/
 credentials*.json
+client_secret*.json
 token*.json
 *.sqlite
 *.sqlite-*
